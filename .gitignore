@@ -1,0 +1,3 @@
+.env
+model_*.txt
+__pycache__
