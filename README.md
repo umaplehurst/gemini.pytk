@@ -26,11 +26,16 @@ $ python3 gemini_llm_tkui.py
 Create `.env` file with:
 
 ```sh
-# For Gemini
+# A) For Gemini on Google AI
+# Do not set this if you want Vertex AI
 GOOGLE_API_KEY=<...>
 
-# For Llama MAAS on Vertex AI
-GOOGLE_VERTEX_AI_API_KEY=<...>
+# B) For Vertex AI
+GOOGLE_APPLICATION_CREDENTIALS=<...>.json
+GOOGLE_VERTEX_AI_PROJECT_ID=<...>
+GOOGLE_VERTEX_AI_REGION=us-central1
+
+# C) For Llama MAAS on Vertex AI
 GOOGLE_VERTEX_AI_JSON=<...>.json
 GOOGLE_VERTEX_AI_MAAS_ENDPOINT=us-central1-aiplatform.googleapis.com
 GOOGLE_VERTEX_AI_MAAS_PROJECT_ID=<...>
@@ -60,7 +65,5 @@ GOOGLE_VERTEX_AI_MAAS_REGION=us-central1
 - File attachments have had very limited testing so far
   * `audio/mp3` works, I haven't tested anything else but should be as simple as mapping the `mime_type`
   * load/save works and de/serializes the blobs
-- Vertex AI API for Gemini
-  * this tool only works with `google.generativeai` but extending to add Vertex AI is not a difficult job
 
 I have no plans to currently implement these, but PRs are very welcome!

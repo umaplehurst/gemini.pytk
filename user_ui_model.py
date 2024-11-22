@@ -1,5 +1,5 @@
 from model_meta_llama_vertexai import ModelMetaLlamaVertexAI
-from model_google_generativeai import ModelGoogleGenerativeAI
+from model_google_ai import ModelGoogleGenerativeAI
 from knob_factory import KnobFactory
 
 from enum import Enum

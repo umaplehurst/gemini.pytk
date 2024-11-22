@@ -9,7 +9,10 @@
 from dotenv import load_dotenv
 load_dotenv(verbose=True, override=True)
 
-from user_ui_model import UserUIModel
+try:
+    from user_ui_model_local import UserUIModel
+except:
+    from user_ui_model import UserUIModel
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext

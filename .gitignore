@@ -1,3 +1,4 @@
 .env
 model_*.txt
+user_ui_model_local.py
 __pycache__
