@@ -41,7 +41,7 @@ class ModelGoogleGenerativeAI:
             self.add_knob("base_model", KnobFactory.create_knob("dropdown", name="Base Model", options=["gemini-pro-experimental", "gemini-1.5-pro-002"], default_value="gemini-pro-experimental"))
         else:
             self.add_knob("top_k", KnobFactory.create_knob("slider", name="Top K", min_value=1, max_value=64, default_value=64))
-            self.add_knob("base_model", KnobFactory.create_knob("dropdown", name="Base Model", options=["gemini-1.5-pro-exp-0827", "gemini-exp-1121"], default_value="gemini-1.5-pro-exp-0827"))
+            self.add_knob("base_model", KnobFactory.create_knob("dropdown", name="Base Model", options=["gemini-1.5-pro-exp-0827", "gemini-exp-1206"], default_value="gemini-1.5-pro-exp-0827"))
 
     def add_knob(self, key: str, knob: Knob):
         self.knobs[key] = knob
