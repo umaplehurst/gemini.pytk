@@ -1,10 +1,12 @@
 import os
 
+CREATE_CONTENT = False
+
 # Pick API flavor depending on what is in .env
 if not "GOOGLE_API_KEY" in os.environ:
     print(">> Using Vertex AI")
     import vertexai
-    from vertexai.generative_models import GenerativeModel
+    from vertexai.generative_models import Content, GenerativeModel, Part
     from vertexai.generative_models import HarmCategory, HarmBlockThreshold
 
     if not "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
@@ -13,6 +15,8 @@ if not "GOOGLE_API_KEY" in os.environ:
         raise ValueError("Missing project ID")
     if not "GOOGLE_VERTEX_AI_REGION" in os.environ:
         raise ValueError("Missing project region")
+
+    CREATE_CONTENT = True
     vertexai.init(project=os.environ["GOOGLE_VERTEX_AI_PROJECT_ID"],
                   location=os.environ["GOOGLE_VERTEX_AI_REGION"])
 else:
@@ -38,10 +42,10 @@ class ModelGoogleGenerativeAI:
         # Set model names depending on API
         if not "GOOGLE_API_KEY" in os.environ:
             self.add_knob("top_k", KnobFactory.create_knob("slider", name="Top K", min_value=1, max_value=40, default_value=40))
-            self.add_knob("base_model", KnobFactory.create_knob("dropdown", name="Base Model", options=["gemini-pro-experimental", "gemini-1.5-pro-002"], default_value="gemini-pro-experimental"))
+            self.add_knob("base_model", KnobFactory.create_knob("dropdown", name="Base Model", options=["gemini-2.0-pro-exp-02-05", "gemini-1.5-pro-002"], default_value="gemini-2.0-pro-exp-02-05"))
         else:
             self.add_knob("top_k", KnobFactory.create_knob("slider", name="Top K", min_value=1, max_value=64, default_value=64))
-            self.add_knob("base_model", KnobFactory.create_knob("dropdown", name="Base Model", options=["gemini-1.5-pro-exp-0827", "gemini-exp-1206"], default_value="gemini-1.5-pro-exp-0827"))
+            self.add_knob("base_model", KnobFactory.create_knob("dropdown", name="Base Model", options=["gemini-2.0-pro-exp-02-05", "gemini-1.5-pro"], default_value="gemini-2.0-pro-exp-02-05"))
 
     def add_knob(self, key: str, knob: Knob):
         self.knobs[key] = knob
@@ -77,8 +81,14 @@ class ModelGoogleGenerativeAI:
 
         filtered_history = []
         for i in history:
-            to_copy = ["role", "parts"]
-            filtered_i = {key: value for key, value in i.items() if key in to_copy}
+            if CREATE_CONTENT:
+                parts = []
+                for j in i["parts"]:
+                    parts.append(Part.from_text(j))
+                filtered_i = Content(role=i["role"], parts=parts)
+            else:
+                to_copy = ["role", "parts"]
+                filtered_i = {key: value for key, value in i.items() if key in to_copy}
             filtered_history.append(filtered_i)
 
         chat_session = model.start_chat(history=filtered_history)
