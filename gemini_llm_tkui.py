@@ -101,12 +101,14 @@ class LLMControlUI:
         self.clear_search_button.pack(side=tk.LEFT, padx=(5, 0))
 
         # Create tree view
-        self.tree = ttk.Treeview(left_frame, columns=("Role", "Sequence", "Content"), show="headings")
+        self.tree = ttk.Treeview(left_frame, columns=("Role", "Sequence", "Size", "Content"), show="headings")
         self.tree.heading("Role", text="Role")
         self.tree.heading("Sequence", text="Sequence")
+        self.tree.heading("Size", text="Size")
         self.tree.heading("Content", text="Content")
         self.tree.column("Role", minwidth=75, width=75, stretch=False)
         self.tree.column("Sequence", minwidth=75, width=75, stretch=False)
+        self.tree.column("Size", minwidth=75, width=75, stretch=False)
         self.tree.column("Content", stretch=True)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
@@ -388,7 +390,8 @@ class LLMControlUI:
         def save_changes():
             new_content = text_widget.get("1.0", tk.END).strip()
             self.history[index]["parts"][0] = new_content
-            self.tree.item(item, values=(role, sequence, new_content))
+            new_content_size = len(new_content)
+            self.tree.item(item, values=(role, sequence, new_content_size, new_content))
             dialog.destroy()
 
         # Create button frame
@@ -450,7 +453,8 @@ class LLMControlUI:
                     self.selected_file_path = None
 
             displayed_message = self.format_content_for_display(message)
-            self.tree.insert("", tk.END, values=("user", my_seq, displayed_message))
+            displayed_message_size = len(displayed_message)
+            self.tree.insert("", tk.END, values=("user", my_seq, displayed_message_size, displayed_message))
             self.input_box.delete("1.0", tk.END)
 
             # Update status
@@ -486,7 +490,8 @@ class LLMControlUI:
 
             self.history.append({"role": "model", "parts": [r_text], "sequence": my_seq})
             displayed_response = self.format_content_for_display(r_text)
-            self.tree.insert("", tk.END, values=("model", my_seq, displayed_response))
+            displayed_response_size = len(displayed_response)
+            self.tree.insert("", tk.END, values=("model", my_seq, displayed_response_size, displayed_response))
 
             # Update status to IDLE
             self.status_var.set("Status: IDLE")
@@ -598,8 +603,10 @@ class LLMControlUI:
         self.tree.delete(*self.tree.get_children())
         for item in self.history:
             sequence = item.get("sequence")
-            content = self.format_content_for_display(item["parts"][0])
-            self.tree.insert("", tk.END, values=(item["role"], sequence, content))
+            full_content = item["parts"][0]
+            content = self.format_content_for_display(full_content)
+            content_size = len(full_content)
+            self.tree.insert("", tk.END, values=(item["role"], sequence, content_size, content))
         self.perform_search()  # Re-apply search after updating tree view
 
     def add_task_to_queue(self, tk_command):
