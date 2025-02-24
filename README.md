@@ -35,11 +35,8 @@ GOOGLE_APPLICATION_CREDENTIALS=<...>.json
 GOOGLE_VERTEX_AI_PROJECT_ID=<...>
 GOOGLE_VERTEX_AI_REGION=us-central1
 
-# C) For Llama MAAS on Vertex AI
-GOOGLE_VERTEX_AI_JSON=<...>.json
-GOOGLE_VERTEX_AI_MAAS_ENDPOINT=us-central1-aiplatform.googleapis.com
-GOOGLE_VERTEX_AI_MAAS_PROJECT_ID=<...>
-GOOGLE_VERTEX_AI_MAAS_REGION=us-central1
+# C) For Llama on Groq
+GROQ_API_KEY=<...>
 ```
 
 # What can you do?

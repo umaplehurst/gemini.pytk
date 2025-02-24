@@ -1,4 +1,4 @@
-from model_meta_llama_vertexai import ModelMetaLlamaVertexAI
+from model_meta_llama_groq import ModelMetaLlamaGroq
 from model_google_ai import ModelGoogleGenerativeAI
 from knob_factory import KnobFactory
 
@@ -31,7 +31,7 @@ class UserUIModel(ModelGoogleGenerativeAI):
                 print("!!! missing system instructions:", file_path)
 
         # Persist Llama objects
-        self.instance_tm_llama = ModelMetaLlamaVertexAI(self.system_instructions_options[ModelChoice.TEST_MODEL_LLAMA])
+        self.instance_tm_llama = ModelMetaLlamaGroq(self.system_instructions_options[ModelChoice.TEST_MODEL_LLAMA])
 
     def _add_custom_knobs(self):
         # Add the model_choice knob

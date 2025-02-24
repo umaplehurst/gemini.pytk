@@ -1,9 +1,4 @@
 import os
-
-import google.auth
-from google.auth.transport.requests import Request
-from google.oauth2 import service_account
-
 from openai import AsyncOpenAI
 
 class UsageMetadataWrapper:
@@ -11,11 +6,11 @@ class UsageMetadataWrapper:
         self.total_token_count = 0
 
 # To not create a bunch of different classes, we just do everything in this one
-class ModelMetaLlamaVertexAI:
+class ModelMetaLlamaGroq:
     def __init__(self, system_instructions):
         self.client = None
         self.messages = None
-        self.model = "meta/llama-3.1-405b-instruct-maas"
+        self.model = "llama-3.3-70b-versatile"
         self.system_instructions = system_instructions
 
         # Reply properties
@@ -44,30 +39,11 @@ class ModelMetaLlamaVertexAI:
                 print("!!! message ignored --", i)
             to_copy = ["role", "parts"]
 
-        if not self.credentials:
-            json_path = os.environ["GOOGLE_VERTEX_AI_JSON"]
-            if not json_path:
-                raise ValueError("missing GOOGLE_VERTEX_AI_JSON")
+        API_KEY=os.environ["GROQ_API_KEY"]
+        if not API_KEY:
+            raise ValueError("missing GROQ_API_KEY")
 
-            AUTH_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
-            self.credentials = service_account.Credentials.from_service_account_file(os.environ["GOOGLE_VERTEX_AI_JSON"], scopes=AUTH_SCOPES)
-
-        self.credentials.refresh(Request())
-        access_token = self.credentials.token
-
-        ENDPOINT=os.environ["GOOGLE_VERTEX_AI_MAAS_ENDPOINT"]
-        if not ENDPOINT:
-            raise ValueError("missing ENDPOINT")
-
-        PROJECT_ID=os.environ["GOOGLE_VERTEX_AI_MAAS_PROJECT_ID"]
-        if not PROJECT_ID:
-            raise ValueError("missing PROJECT_ID")
-
-        REGION=os.environ["GOOGLE_VERTEX_AI_MAAS_REGION"]
-        if not REGION:
-            raise ValueError("missing REGION")
-
-        self.client = AsyncOpenAI(api_key=access_token, base_url=f"https://{ENDPOINT}/v1/projects/{PROJECT_ID}/locations/{REGION}/endpoints/openapi")
+        self.client = AsyncOpenAI(api_key=API_KEY, base_url=f"https://api.groq.com/openai/v1")
         return self
 
     async def send_message_async(self, message):
@@ -78,16 +54,6 @@ class ModelMetaLlamaVertexAI:
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=self.messages,
-            extra_body={
-                "extra_body": {
-                    "google": {
-                        "model_safety_settings": {
-                            "enabled": False, # True,
-                            "llama_guard_settings": {},
-                        }
-                    }
-                }
-            }
         )
         # print(self.messages)
         # print(response)
