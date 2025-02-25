@@ -1,9 +1,6 @@
 # What is this?
 
-This tool is a Python Tk interface to Gemini. Because AI Studio gets too clunky when the context gets big.
-This is my primary tool that I use in my research work and thought others may benefit from it. The tool
-also supports Llama on Vertex AI MAAS using the OpenAI API. You can easily add other LLMs as well, of
-course.
+This tool is a Python Tk interface to Gemini. Because AI Studio gets too clunky when the context gets big. This is my primary tool that I use in my research work and thought others may benefit from it. The tool also supports Llama on Groq. You can easily add other LLMs as well, of course.
 
 # UI screenshot
 
@@ -15,10 +12,9 @@ Make sure Python tkinter is available, as appropriate depending on your OS and y
 
 ```sh
 # set credentials as needed (create .env file)
-# edit user_ui_model.py
-# create .txt files for your System Instructions
-$ pip install async-tkinter-loop google-generativeai openai
-$ python3 gemini_llm_tkui.py
+# (if desired) copy + edit user_ui_model.py to user_ui_model_local.py
+# (if desired) create .txt files for your Prompt Stack
+$ uv run gemini_llm_tkui.py
 ```
 
 # Configure your keys

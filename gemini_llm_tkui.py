@@ -1,11 +1,15 @@
+#!/usr/bin/env -S uv run --script
 # /// script
 # dependencies = [
+#   "dotenv",
 #   "async-tkinter-loop",
 #   "google-generativeai",
+#   "google-cloud-aiplatform",
 #   "openai",
 #   "pygments",
 #   "tkinterweb",
 #   "xmlformatter",
+#   "bs4",
 # ]
 # ///
 
