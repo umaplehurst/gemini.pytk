@@ -3,12 +3,17 @@
 #   "async-tkinter-loop",
 #   "google-generativeai",
 #   "openai",
+#   "pygments",
+#   "tkinterweb",
+#   "xmlformatter",
 # ]
 # ///
 
 from dotenv import load_dotenv
 load_dotenv(verbose=True, override=True)
 
+from content_utils import fix_content
+from prompt_stack_manager import PromptStackManager
 try:
     from user_ui_model_local import UserUIModel
 except:
@@ -17,6 +22,14 @@ except:
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from tkinter import StringVar
+
+USE_PYGMENTS = True
+if USE_PYGMENTS:
+    import re
+    import pygments
+    from pygments import lexers
+    from pygments.formatters import HtmlFormatter
+    import tkinterweb  # For HTML rendering
 
 import asyncio
 from queue import Queue
@@ -47,6 +60,8 @@ class LLMControlUI:
         self.root.geometry("1280x800")
 
         self.ui_model = UserUIModel()
+        self.prompt_manager = PromptStackManager()
+
         self.seq_user = 0
         self.seq_model = 0
         self.history = []
@@ -103,12 +118,12 @@ class LLMControlUI:
         # Create tree view
         self.tree = ttk.Treeview(left_frame, columns=("Role", "Sequence", "Size", "Content"), show="headings")
         self.tree.heading("Role", text="Role")
-        self.tree.heading("Sequence", text="Sequence")
+        self.tree.heading("Sequence", text="Seq.")
         self.tree.heading("Size", text="Size")
         self.tree.heading("Content", text="Content")
-        self.tree.column("Role", minwidth=75, width=75, stretch=False)
-        self.tree.column("Sequence", minwidth=75, width=75, stretch=False)
-        self.tree.column("Size", minwidth=75, width=75, stretch=False)
+        self.tree.column("Role", minwidth=50, width=50, stretch=False)
+        self.tree.column("Sequence", minwidth=50, width=50, stretch=False)
+        self.tree.column("Size", minwidth=50, width=50, stretch=False)
         self.tree.column("Content", stretch=True)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
@@ -132,6 +147,10 @@ class LLMControlUI:
         # Create input frame
         input_frame = ttk.Frame(root)
         input_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        # Create prompt selector frame
+        self.prompt_frame = ttk.Frame(input_frame)
+        self.prompt_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
 
         # Create input box (now scrolledtext)
         self.input_box = scrolledtext.ScrolledText(input_frame, height=5)
@@ -163,13 +182,43 @@ class LLMControlUI:
         self.queue_text.pack(side=tk.LEFT, fill=tk.X, padx=10, expand=True)
 
         # Create right frame for preview
-        right_frame = ttk.Frame(main_frame)
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(10, 0))
-        paned_window.add(right_frame)
+        self.right_frame = ttk.Frame(main_frame)
+        self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(10, 0))
+        paned_window.add(self.right_frame)
 
-        # Create preview text widget
-        self.preview_text = scrolledtext.ScrolledText(right_frame, wrap=tk.WORD, width=50)
-        self.preview_text.pack(fill=tk.BOTH, expand=True)
+        # Viewer selection frame
+        viewer_frame = ttk.Frame(self.right_frame)
+        viewer_frame.pack(fill=tk.X, padx=2, pady=5)
+        
+        # Radio buttons to select viewer type
+        self.viewer_type = tk.StringVar(value="text")
+        ttk.Radiobutton(viewer_frame, text="Plain Text", variable=self.viewer_type, value="text", command=self.update_viewer).pack(side=tk.LEFT)
+        ttk.Radiobutton(viewer_frame, text="Syntax Highlight", variable=self.viewer_type, value="html", command=self.update_viewer).pack(side=tk.LEFT)
+
+        # Content formatting options
+        self.formatting_clean_xml = tk.BooleanVar(value=False)
+        ttk.Checkbutton(viewer_frame, text="Clean XML", variable=self.formatting_clean_xml, command=self.update_preview).pack(side=tk.LEFT, padx=(0, 10))
+
+        # Font size selector
+        ttk.Label(viewer_frame, text="").pack(side=tk.LEFT, expand=True)
+        ttk.Label(viewer_frame, text="Font Size (px):").pack(side=tk.LEFT, padx=5)
+        self.font_size = 12
+        self.font_size_var = tk.StringVar(value="12")
+        self.font_size_spinbox = ttk.Spinbox(viewer_frame, from_=8, to=32, textvariable=self.font_size_var, width=5, command=self.update_font_size)
+        self.font_size_spinbox.pack(side=tk.LEFT)
+        self.font_size_var.trace("w", lambda *args: self.update_font_size())
+
+        # Add horizontal separator
+        self.content_separator = ttk.Separator(self.right_frame, orient=tk.HORIZONTAL)
+        self.content_separator.pack(fill=tk.X, pady=(5, 5))
+
+        # Create content frame to hold the preview
+        self.content_frame = ttk.Frame(self.right_frame, style='ContentFrame.TFrame')
+        self.content_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Initialize viewer
+        self.preview_text = None
+        self.update_viewer()
 
         # Start ZMQ subscriber thread
         if self.zmq_subscriber:
@@ -186,12 +235,20 @@ class LLMControlUI:
         file_menu.add_command(label="Load Context", command=self.load_context)
         file_menu.add_command(label="Save Context", command=self.save_context)
 
+        # Create Model menu
+        self.model_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Model", menu=self.model_menu)
+        self._create_model_menu()
+
         # Create Settings menu
         self.settings_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Settings", menu=self.settings_menu)
+        self._update_settings_menu()
 
-        # Dynamically create menu items for knobs
-        self.create_knob_menu_items()
+        # Create Prompt Stack menu
+        self.prompt_stack_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Prompt Stack", menu=self.prompt_stack_menu)
+        self._create_prompt_stack_menu()
 
         # Create status bar
         self.status_bar = ttk.Frame(root)
@@ -264,32 +321,362 @@ class LLMControlUI:
             self.tree.item(item, tags=())
         self.search_results_var.set("Search Results: 0")
 
-    def update_preview(self, event):
+    def update_viewer(self):
+        """Switches between plain text and syntax-highlighted viewers."""
+        if self.preview_text:
+            self.preview_text.pack_forget()
+            self.preview_text.destroy()
+            self.preview_text = None
+        
+        if self.viewer_type.get() == "text":
+            self.preview_text = scrolledtext.ScrolledText(self.content_frame, wrap=tk.WORD, width=50)
+        else:
+            self.create_syntax_highlighted_display()
+        
+        self.preview_text.pack(fill=tk.BOTH, expand=True)
+        self.update_preview()
+    
+    def update_font_size(self, event=None):
+        """Updates the font size in the syntax-highlighted viewer."""
+        try:
+            self.font_size = int(self.font_size_var.get())
+            self.update_preview()
+        except ValueError:
+            messagebox.showerror("Error", "Font size must be an integer.")
+
+    def create_syntax_highlighted_display(self):
+        """Replace the preview text widget with a syntax-highlighting capable one"""
+        # Create new display using tkinterweb
+        self.preview_text = tkinterweb.HtmlFrame(self.content_frame, messages_enabled=False, horizontal_scrollbar="auto")
+        # Do not use threading
+        self.preview_text.html.max_thread_count = 0
+
+        # Configure HTML/CSS for syntax highlighting
+        self.html_formatter = HtmlFormatter(style='monokai', lineseparator='<br/>')
+        self.css = self.html_formatter.get_style_defs('.highlight')
+
+    def update_preview(self, event=None):
         selected_items = self.tree.selection()
         if selected_items:
-            item = selected_items[0]  # Get the first selected item
+            item = selected_items[0]
             item_id = self.tree.index(item)
             sequence = self.history[item_id].get("sequence", "N/A")
             role = self.history[item_id]["role"]
-            content = self.history[item_id]["parts"][0]
-            self.preview_text.delete("1.0", tk.END)
-            self.preview_text.insert(tk.END, f"Sequence: {sequence}\nRole: {role}\nContent:\n\n{content}")
-        else:
-            self.preview_text.delete("1.0", tk.END)
 
-    # FIXME: We need to change these menu items depending on Gemini / Llama etc.
-    # Because the same parameters are not directly equivalent between LLM species
-    def create_knob_menu_items(self):
-        for key, knob in self.ui_model.get_knobs().items():
+            # Get content
+            content = self.history[item_id]["parts"][0]
+
+            # Apply any rendering fix-ups
+            content = fix_content(content, self.formatting_clean_xml.get())
+
+            # Non-HTML
+            if self.viewer_type.get() == "text":
+                self.preview_text.delete("1.0", tk.END)
+                self.preview_text.insert(tk.END, content)
+                return
+
+            # Process content to handle markdown with code blocks
+            processed_content = ""
+            
+            # Default to markdown for most content
+            default_lexer = lexers.get_lexer_by_name("markdown")
+            
+            # Regular expression to find code blocks ```language ... ```
+            code_blocks = re.finditer(r'(```(\w*)\n)(.*?)(\n```)', content, re.DOTALL)
+            
+            last_end = 0
+            has_code_blocks = False
+            
+            for match in code_blocks:
+                has_code_blocks = True
+                start, end = match.span()
+                
+                # Add text before this code block using markdown lexer
+                if start > last_end:
+                    markdown_part = content[last_end:start]
+                    processed_content += pygments.highlight(markdown_part, default_lexer, self.html_formatter)
+                
+                # Extract opening, language, code and closing parts
+                opening = match.group(1)  # ```language\n
+                lang = match.group(2).strip() or None
+                code = match.group(3)
+                closing = match.group(4)  # \n```
+                
+                # First highlight the opening backticks with markdown lexer
+                processed_content += pygments.highlight(opening, default_lexer, self.html_formatter)
+                
+                try:
+                    # Try to use the specified language
+                    if lang and lang.lower() not in ('text', 'plain', 'markdown', 'md'):
+                        code_lexer = lexers.get_lexer_by_name(lang.lower())
+                    else:
+                        # Try to guess if no useful language is specified
+                        code_lexer = lexers.guess_lexer(code)
+                except:
+                    # Default to text if we can't determine the language
+                    code_lexer = lexers.get_lexer_by_name("text")
+                    
+                # Highlight the code block with appropriate lexer
+                highlighted_code_part = pygments.highlight(code, code_lexer, self.html_formatter)
+                processed_content += highlighted_code_part
+                
+                # Highlight the closing backticks with markdown lexer
+                processed_content += pygments.highlight(closing, default_lexer, self.html_formatter)
+                
+                last_end = end
+                
+            # Add any remaining text after the last code block
+            if last_end < len(content):
+                remaining = content[last_end:]
+                processed_content += pygments.highlight(remaining, default_lexer, self.html_formatter)
+                
+            # If no code blocks were found, just use markdown for everything
+            if not has_code_blocks:
+                processed_content = pygments.highlight(content, default_lexer, self.html_formatter)
+                
+            # Store the processed content for the next steps    
+            highlighted_code = processed_content
+           
+            # TASK: Process the highlighted code to preserve whitespace while allowing wrapping
+            #
+            # First, convert spaces to non-breaking spaces to preserve consecutive spaces
+            # and replace tabs with the appropriate number of spaces
+            def process_content(match):
+                span_tag = match.group(1)  # This is the full span tag with attributes
+                content = match.group(2)   # This is just the content inside the span
+                
+                # Replace leading spaces with non-breaking spaces
+                processed = re.sub(r'^([ \t]+)', lambda m: '&nbsp;' * len(m.group(1)), content, flags=re.MULTILINE)
+                # Replace consecutive spaces with alternating space and non-breaking space
+                processed = re.sub(r'  +', lambda m: '&nbsp; ' * (len(m.group(0)) // 2) + ('&nbsp;' if len(m.group(0)) % 2 else ''), processed)
+                
+                # Return the span with its original attributes but processed content
+                return f'<span {span_tag}>{processed}</span>'
+                
+            # Use a regex to capture the content between span tags and process it
+            # The regex now captures both the span attributes and the content separately
+            highlighted_code = re.sub(r'<span([^>]*)>(.*?)</span>', process_content, highlighted_code, flags=re.DOTALL)
+            
+            # Then replace the pre tag with our wrapper div
+            highlighted_code = highlighted_code.replace(
+                '<div class="highlight"><pre>', 
+                '<div class="highlight"><div class="code-wrapper">'
+            ).replace('</pre></div>', '</div></div>')
+
+            # Create complete HTML document
+            css = self.css + f"""
+                body {{ 
+                    font-size: {self.font_size}px; 
+                }}
+            """
+            
+            html_content = f"""
+            <html>
+            <head>
+                <style>
+                    body {{ 
+                        background-color: #282828;
+                        color: #f8f8f2;
+                        font-family: 'IBM Plex Mono', 'Consolas', 'Monaco', monospace;
+                        padding: 2px;
+                    }}
+                    .metadata {{
+                        color: #66d9ef;
+                        margin-bottom: 10px;
+                    }}
+                    .code-wrapper {{
+                        font-family: monospace;
+                        margin: 0;
+                        padding: 0;
+                    }}
+                    {css}
+                </style>
+            </head>
+            <body>
+                <div class="metadata">
+                    Sequence: {sequence}<br>
+                    Role: {role}
+                </div>
+                {highlighted_code}
+            </body>
+            </html>
+            """
+            
+            # Update the display
+            self.preview_text.load_html(html_content)
+
+    def _update_prompt_selector_ui(self):
+        """Update the prompt selector buttons"""
+        # Clear existing buttons
+        for widget in self.prompt_frame.winfo_children():
+            widget.destroy()
+
+        prompts = self.prompt_manager.prompts
+        if not prompts:
+            # Show "No prompts" label if no prompts available
+            ttk.Label(self.prompt_frame, text="No prompts available").pack(side=tk.LEFT)
+            return
+
+        # Create a button for each prompt
+        for i, prompt in enumerate(prompts):
+            filename = self.prompt_manager.get_prompt_filename(i)
+            btn = ttk.Button(
+                self.prompt_frame,
+                text=filename,  # Show filename instead of number
+                command=lambda idx=i: self._select_prompt(idx)
+            )
+            btn.pack(side=tk.LEFT, padx=(0, 2))
+
+            # Add tooltip with prompt preview
+            self._create_tooltip(btn, prompt[:100] + ("..." if len(prompt) > 100 else ""))
+
+    def _create_tooltip(self, widget, text):
+        """Create a tooltip for a widget"""
+        def enter(event):
+            x, y, _, _ = widget.bbox("insert")
+            x += widget.winfo_rootx() + 25
+            y += widget.winfo_rooty() + 20
+
+            # Create tooltip window
+            self.tooltip = tk.Toplevel(widget)
+            self.tooltip.wm_overrideredirect(True)
+            self.tooltip.wm_geometry(f"+{x}+{y}")
+
+            label = ttk.Label(self.tooltip, text=text, justify=tk.LEFT,
+                            background="#ffffe0", relief="solid", borderwidth=1)
+            label.pack()
+
+        def leave(event):
+            if hasattr(self, 'tooltip'):
+                self.tooltip.destroy()
+                del self.tooltip
+
+        widget.bind('<Enter>', enter)
+        widget.bind('<Leave>', leave)
+
+    def _select_prompt(self, index: int):
+        """Handle prompt selection"""
+        self.prompt_manager.set_current_prompt(index)
+
+        # Update button styles to show selection
+        for i, btn in enumerate(self.prompt_frame.winfo_children()):
+            if i == index:
+                btn.state(['pressed'])  # Highlight selected button
+            else:
+                btn.state(['!pressed'])  # Un-highlight other buttons
+
+    def _on_prompt_selected(self, event):
+        """Handle prompt selection"""
+        if self.prompt_selector.get() != "No prompts available":
+            # Extract index from the selection (assumes "N. prompt..." format)
+            index = int(self.prompt_selector.get().split('.')[0]) - 1
+            self.prompt_manager.set_current_prompt(index)
+
+    def _on_stack_selected(self, *args):
+        """Handle stack selection"""
+        if not self.selected_stack.get():
+            return
+        try:
+            self.prompt_manager.load_stack(self.selected_stack.get())
+            self._update_prompt_selector_ui()
+            # Select first prompt by default
+            if self.prompt_manager.prompts:
+                self._select_prompt(0)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load prompt stack: {str(e)}")
+
+    def _create_prompt_stack_menu(self):
+        """Create simple stack selection menu"""
+        self.prompt_stack_menu.delete(0, tk.END)
+
+        if not hasattr(self, 'selected_stack'):
+            self.selected_stack = tk.StringVar()
+            self.selected_stack.trace("w", self._on_stack_selected)
+
+        stacks = self.prompt_manager.get_available_stacks()
+        if not stacks:
+            self.prompt_stack_menu.add_command(
+                label="No stacks found",
+                state="disabled"
+            )
+        else:
+            for stack in sorted(stacks):
+                self.prompt_stack_menu.add_radiobutton(
+                    label=stack,
+                    variable=self.selected_stack,
+                    value=stack
+                )
+
+    def _on_model_changed(self, *args):
+        """Handle model selection changes"""
+        if not self.selected_model.get():
+            return
+            
+        provider_name, model_id = self.selected_model.get().split(":")
+        self.ui_model.set_provider(provider_name)
+        self.ui_model.set_model(model_id)
+        
+        # Update provider settings menu
+        self._update_provider_settings()
+
+    def _create_model_menu(self):
+        """Create the model selection dropdown"""
+        # Initialize selected model if not exists
+        if not hasattr(self, 'selected_model'):
+            self.selected_model = tk.StringVar()
+            if self.ui_model.current_provider and self.ui_model.current_model:
+                current = f"{self.ui_model.current_provider.name}:{self.ui_model.current_model}"
+                self.selected_model.set(current)
+
+        def update_model(*args):
+            if not self.selected_model.get():
+                return
+            provider_name, model_id = self.selected_model.get().split(":")
+            self.ui_model.set_provider(provider_name)
+            self.ui_model.set_model(model_id)
+            self._update_settings_menu()
+
+        self.selected_model.trace("w", update_model)
+       
+        # Add all models in a flat list
+        for provider_name, provider in self.ui_model.get_providers().items():
+            for model in provider.get_available_models():
+                model_value = f"{provider_name}:{model.id}"
+                label = f"{model.name} ({provider_name})"
+                self.model_menu.add_radiobutton(
+                    label=label,
+                    variable=self.selected_model,
+                    value=model_value
+                )
+
+    def _update_settings_menu(self):
+        """Update settings menu based on current provider"""
+        # Clear existing settings
+        self.settings_menu.delete(0, tk.END)
+        
+        current_provider = self.ui_model.current_provider
+        if not current_provider:
+            return
+            
+        # Add provider name as header (disabled menu item)
+        self.settings_menu.add_command(
+            label=f"Provider: {current_provider.name}",
+            state="disabled"
+        )
+        self.settings_menu.add_separator()
+        
+        settings = current_provider.get_settings()
+        
+        for key, knob in settings.items():
             ui_component = knob.get_ui_component()
             if ui_component["type"] == "slider":
-                self.create_slider_menu_item(key, ui_component)
+                self._create_slider_menu_item(key, ui_component)
             elif ui_component["type"] == "dropdown":
-                self.create_dropdown_menu_item(key, ui_component)
+                self._create_dropdown_menu_item(key, ui_component)
             elif ui_component["type"] == "checkbox":
-                self.create_checkbox_menu_item(key, ui_component)
+                self._create_checkbox_menu_item(key, ui_component)
 
-    def create_slider_menu_item(self, key, ui_component):
+    def _create_slider_menu_item(self, key, ui_component):
         def format_value(value, is_integer):
             return f"{int(value)}" if is_integer else f"{value:.2f}"
 
@@ -335,7 +722,7 @@ class LLMControlUI:
         self.settings_menu.add_command(label=ui_component["name"],
                                        command=lambda: slider_window.deiconify())
 
-    def create_dropdown_menu_item(self, key, ui_component):
+    def _create_dropdown_menu_item(self, key, ui_component):
         value = tk.StringVar(value=ui_component["value"])
 
         def update_value(*args):
@@ -349,7 +736,7 @@ class LLMControlUI:
 
         self.settings_menu.add_cascade(label=ui_component["name"], menu=dropdown_menu)
 
-    def create_checkbox_menu_item(self, key, ui_component):
+    def _create_checkbox_menu_item(self, key, ui_component):
         value = tk.BooleanVar(value=ui_component["value"])
 
         def update_value():
@@ -462,7 +849,7 @@ class LLMControlUI:
             self.root.update()
 
             # Get LLM response
-            self.chat_session = self.ui_model.generate_chat_session(self.history)
+            self.chat_session = self.ui_model.generate_chat_session(self.history, self.prompt_manager.get_current_prompt())
             self.history.append({"role": "user", "parts": parts, "sequence": my_seq})
 
             start_time = time.time()
