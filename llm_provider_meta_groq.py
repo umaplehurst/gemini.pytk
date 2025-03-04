@@ -1,9 +1,14 @@
 from llm_provider import LLMProvider, ModelOption
 from knob_factory import KnobFactory
+
 from typing import Dict, List, Any, Optional
+from conversation_manager import ConversationManager
 
 import os
 from openai import AsyncOpenAI
+
+from icecream import ic
+DEBUG = True
 
 class UsageMetadataWrapper:
     def __init__(self):
@@ -53,7 +58,7 @@ class MetaLlamaGroqProvider(LLMProvider):
     def get_settings(self) -> Dict[str, Any]:
         return self.settings
         
-    def create_chat_session(self, model_id: str, history: List[Dict], system_prompt: Optional[str]) -> Any:
+    def create_chat_session(self, model_id: str, conversation_manager: ConversationManager, system_prompt: Optional[str]) -> Any:
         messages = []
         if system_prompt:
             self.messages.append(
@@ -63,33 +68,45 @@ class MetaLlamaGroqProvider(LLMProvider):
                 }
             )
 
-        for item in history:
+        for item in conversation_manager.get_llm_history():
             # Text only!
             if len(item["parts"]) == 1 and isinstance(item["parts"][0], str):
+                # Translate the message role to OpenAI-lingo
+                llm_role = item["role"]
+                if llm_role == 'model':
+                    llm_role = 'assistant'
+
                 messages.append({
-                    "role": item["role"], 
+                    "role": llm_role, 
                     "content": item["parts"][0]
                 })
             else:
                 print("!!! message ignored --", item)
-                
+        if DEBUG:
+            ic("LLM chat_history:", messages)
+
         return ChatSession(
             client=self.client,
             model=model_id,
             messages=messages,
-            settings=self.settings
+            settings=self.settings,
+            conversation_manager=conversation_manager
         )
 
 class ChatSession:
-    def __init__(self, client, model, messages, settings):
+    def __init__(self, client, model, messages, settings, conversation_manager):
         self.client = client
         self.model = model
         self.messages = messages
         self.settings = settings
         self.text = None
         self.usage_metadata = UsageMetadataWrapper()
+        self.conversation_manager = conversation_manager
         
     async def send_message_async(self, message):
+        # Track the initial history length to identify new items
+        initial_history_length = len(self.conversation_manager.history)
+
         self.messages.append({
             "role": "user",
             "content": message
@@ -101,7 +118,19 @@ class ChatSession:
             temperature=self.settings["temperature"].get_value(),
             top_p=self.settings["top_p"].get_value()
         )
-        
+        if DEBUG:
+            ic("LLM response:", response)
+
         self.text = response.choices[0].message.content
         self.usage_metadata.total_token_count = response.usage.total_tokens
-        return self
+
+        # Attach new response
+        self.conversation_manager.add_model_message(self.text, self.conversation_manager.seq_user + 1)
+
+        # Bump conversation manager's sequence number
+        self.conversation_manager.seq_user += 1
+
+        # Attach the new history items to the response
+        new_history_items = self.conversation_manager.history[initial_history_length:]
+
+        return (self, new_history_items)

@@ -3,13 +3,13 @@
 # dependencies = [
 #   "dotenv",
 #   "async-tkinter-loop",
-#   "google-generativeai",
-#   "google-cloud-aiplatform",
+#   "google-genai",
 #   "openai",
 #   "pygments",
 #   "tkinterweb",
 #   "xmlformatter",
 #   "bs4",
+#   "icecream",
 # ]
 # ///
 
@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 load_dotenv(verbose=True, override=True)
 
 from content_utils import fix_content
+from conversation_manager import ConversationManager
 from prompt_stack_manager import PromptStackManager
 try:
     from user_ui_model_local import UserUIModel
@@ -68,7 +69,7 @@ class LLMControlUI:
 
         self.seq_user = 0
         self.seq_model = 0
-        self.history = []
+        self.conversation_manager = ConversationManager()
         self.stopped = False
 
         # ZMQ connection
@@ -292,13 +293,14 @@ class LLMControlUI:
         matches = 0
         for item in self.tree.get_children():
             index = self.tree.index(item)
-            content = self.history[index]["parts"][0]
-
-            if search_term in content.lower():
-                self.tree.item(item, tags=('match',))
-                matches += 1
-            else:
-                self.tree.item(item, tags=())
+            history_item = self.conversation_manager.history[index]
+            if history_item["parts"]:
+                content = history_item["parts"][0]
+                if search_term in content.lower():
+                    self.tree.item(item, tags=('match',))
+                    matches += 1
+                else:
+                    self.tree.item(item, tags=())
 
         self.tree.tag_configure('match', background='yellow')
         self.search_results_var.set(f"Search Results: {matches}")
@@ -360,154 +362,284 @@ class LLMControlUI:
         self.css = self.html_formatter.get_style_defs('.highlight')
 
     def update_preview(self, event=None):
+        """Update the preview pane based on the selected item in the tree view"""
+        do_clean_xml = self.formatting_clean_xml.get()
+
         selected_items = self.tree.selection()
-        if selected_items:
-            item = selected_items[0]
-            item_id = self.tree.index(item)
-            sequence = self.history[item_id].get("sequence", "N/A")
-            role = self.history[item_id]["role"]
-
-            # Get content
-            content = self.history[item_id]["parts"][0]
-
-            # Apply any rendering fix-ups
-            content = fix_content(content, self.formatting_clean_xml.get())
-
-            # Non-HTML
-            if self.viewer_type.get() == "text":
-                self.preview_text.delete("1.0", tk.END)
-                self.preview_text.insert(tk.END, content)
-                return
-
-            # Process content to handle markdown with code blocks
-            processed_content = ""
+        if not selected_items:
+            return
             
-            # Default to markdown for most content
-            default_lexer = lexers.get_lexer_by_name("markdown")
-            
-            # Regular expression to find code blocks ```language ... ```
-            code_blocks = re.finditer(r'(```(\w*)\n)(.*?)(\n```)', content, re.DOTALL)
-            
-            last_end = 0
-            has_code_blocks = False
-            
-            for match in code_blocks:
-                has_code_blocks = True
-                start, end = match.span()
-                
-                # Add text before this code block using markdown lexer
-                if start > last_end:
-                    markdown_part = content[last_end:start]
-                    processed_content += pygments.highlight(markdown_part, default_lexer, self.html_formatter)
-                
-                # Extract opening, language, code and closing parts
-                opening = match.group(1)  # ```language\n
-                lang = match.group(2).strip() or None
-                code = match.group(3)
-                closing = match.group(4)  # \n```
-                
-                # First highlight the opening backticks with markdown lexer
-                processed_content += pygments.highlight(opening, default_lexer, self.html_formatter)
-                
-                try:
-                    # Try to use the specified language
-                    if lang and lang.lower() not in ('text', 'plain', 'markdown', 'md'):
-                        code_lexer = lexers.get_lexer_by_name(lang.lower())
-                    else:
-                        # Try to guess if no useful language is specified
-                        code_lexer = lexers.guess_lexer(code)
-                except:
-                    # Default to text if we can't determine the language
-                    code_lexer = lexers.get_lexer_by_name("text")
+        item = selected_items[0]
+        item_id = self.tree.index(item)
+        message = self.conversation_manager.history[item_id]
+
+        sequence = message.get("sequence", "N/A")
+        role = message["role"]
+        
+        # Handle different types of content based on role
+        if role == "function":
+            # Handle function calls (especially artifact-related ones)
+            if "function_call" in message:
+                function_name = message["function_call"].get("name", "")
+                args = message["function_call"].get("args", {})
+
+                # FIXME: Wrap in markdown ```xml tags for XML
+                if function_name == "create_artifact":
+                    # For create_artifact, show the initial content
+                    artifact_id = args.get("id", "")
+                    content = args.get("contents", "")
                     
-                # Highlight the code block with appropriate lexer
-                highlighted_code_part = pygments.highlight(code, code_lexer, self.html_formatter)
-                processed_content += highlighted_code_part
-                
-                # Highlight the closing backticks with markdown lexer
-                processed_content += pygments.highlight(closing, default_lexer, self.html_formatter)
-                
-                last_end = end
-                
-            # Add any remaining text after the last code block
-            if last_end < len(content):
-                remaining = content[last_end:]
-                processed_content += pygments.highlight(remaining, default_lexer, self.html_formatter)
-                
-            # If no code blocks were found, just use markdown for everything
-            if not has_code_blocks:
-                processed_content = pygments.highlight(content, default_lexer, self.html_formatter)
-                
-            # Store the processed content for the next steps    
-            highlighted_code = processed_content
-           
-            # TASK: Process the highlighted code to preserve whitespace while allowing wrapping
-            #
-            # First, convert spaces to non-breaking spaces to preserve consecutive spaces
-            # and replace tabs with the appropriate number of spaces
-            def process_content(match):
-                span_tag = match.group(1)  # This is the full span tag with attributes
-                content = match.group(2)   # This is just the content inside the span
-                
-                # Replace leading spaces with non-breaking spaces
-                processed = re.sub(r'^([ \t]+)', lambda m: '&nbsp;' * len(m.group(1)), content, flags=re.MULTILINE)
-                # Replace consecutive spaces with alternating space and non-breaking space
-                processed = re.sub(r'  +', lambda m: '&nbsp; ' * (len(m.group(0)) // 2) + ('&nbsp;' if len(m.group(0)) % 2 else ''), processed)
-                
-                # Return the span with its original attributes but processed content
-                return f'<span {span_tag}>{processed}</span>'
-                
-            # Use a regex to capture the content between span tags and process it
-            # The regex now captures both the span attributes and the content separately
-            highlighted_code = re.sub(r'<span([^>]*)>(.*?)</span>', process_content, highlighted_code, flags=re.DOTALL)
-            
-            # Then replace the pre tag with our wrapper div
-            highlighted_code = highlighted_code.replace(
-                '<div class="highlight"><pre>', 
-                '<div class="highlight"><div class="code-wrapper">'
-            ).replace('</pre></div>', '</div></div>')
+                    # Format display with header
+                    display_content = self._wrap_content_in_markdown_block(content)
+                    display_content = fix_content(display_content, do_clean_xml)
 
-            # Create complete HTML document
-            css = self.css + f"""
+                    self._display_content(display_content, role, sequence)
+                    return
+                    
+                elif function_name == "edit_artifact":
+                    # For edit_artifact, show before and after
+                    artifact_id = args.get("id", "")
+                   
+                    # Get artifact content before this edit
+                    before_content = self.conversation_manager.get_artifact_before_sequence(
+                        artifact_id, sequence)
+                    before_content = self._wrap_content_in_markdown_block(before_content)
+                    
+                    # Get artifact content after this edit
+                    after_content = self.conversation_manager.get_artifact_at_sequence(
+                        artifact_id, sequence)
+                    after_content = self._wrap_content_in_markdown_block(after_content)
+
+                    # Handle both new and legacy format
+                    global_subst = args.get("global_substitutions", [])
+                    single_subst = args.get("single_substitutions", [])
+                    
+                    # Handle legacy format
+                    if "from_string" in args and "to_string" in args:
+                        single_subst.append({
+                            "from": args["from_string"],
+                            "to": args["to_string"]
+                        })
+                    
+                    # Format substitutions for display
+                    subst_display = ""
+                    if global_subst:
+                        subst_display += "Global substitutions:\n"
+                        for i, s in enumerate(global_subst, 1):
+                            subst_display += f"  {i}. '{s.get('from_str', '')}' → '{s.get('to_str', '')}'\n"
+                    
+                    if single_subst:
+                        if subst_display:
+                            subst_display += "\n"
+                        subst_display += "Single-occurrence substitutions:\n"
+                        for i, s in enumerate(single_subst, 1):
+                            subst_display += f"  {i}. '{s.get('from_str', '')}' → '{s.get('to_str', '')}'\n"
+
+                    # If both are available, create split view
+                    if before_content and after_content:
+                        # Format display with header
+                        display_content = f"ARTIFACT EDIT: {artifact_id}\n"
+                        display_content += subst_display
+                        display_content += "\n" + "-" * 40 + "\n\n"
+                        display_content += "BEFORE:\n"
+                        display_content += "-" * 40 + "\n"
+                        display_content += fix_content(before_content, do_clean_xml)
+                        display_content += "\n\n" + "-" * 40 + "\n"
+                        display_content += "AFTER:\n"
+                        display_content += "-" * 40 + "\n"
+                        display_content += fix_content(after_content, do_clean_xml)
+                        
+                        # Display the content
+                        self._display_content(display_content, role, sequence)
+                        return
+                    
+                # Default function call display
+                content = f"Function: {function_name}\n"
+                content += f"Arguments: {json.dumps(args, indent=2)}"
+                self._display_content(content, role, sequence)
+                return
+        
+        # Handle normal message content
+        if message["parts"]:
+            content = message["parts"][0]
+            # Apply any rendering fix-ups
+            content = fix_content(content, do_clean_xml)
+            self._display_content(content, role, sequence)
+        else:
+            # Empty parts array
+            self._display_content("(No content)", role, sequence)
+
+    def _wrap_content_in_markdown_block(self, content):
+        # Skip if content is None or empty
+        if not content:
+            return content
+        
+        # Check if content appears to be XML
+        is_xml = False
+        
+        # Look for XML declaration or opening tag patterns
+        content_stripped = content.strip()
+        if content_stripped.startswith('<?xml') or content_stripped.startswith('<'):
+            # Check for tag structure (simple heuristic)
+            if '>' in content_stripped and content_stripped.count('<') > 0:
+                # Additional verification: should have balanced tags or well-formed structure
+                # This is a simplistic check that catches most XML/HTML
+                is_xml = True
+        
+        # Check for JSON format (alternative highlighting option)
+        is_json = False
+        if (content_stripped.startswith('{') and content_stripped.endswith('}')) or \
+        (content_stripped.startswith('[') and content_stripped.endswith(']')):
+            try:
+                json.loads(content_stripped)
+                is_json = True
+            except:
+                pass
+        
+        # Apply appropriate formatting
+        if is_xml:
+            return f"```xml\n{content}\n```"
+        elif is_json:
+            return f"```json\n{content}\n```"        
+        # Return as is if no specific format detected
+        return content
+
+    def _display_content(self, content, role, sequence):
+        # Non-HTML
+        if self.viewer_type.get() == "text":
+            self.preview_text.delete("1.0", tk.END)
+            self.preview_text.insert(tk.END, content)
+            return
+
+        # Process content to handle markdown with code blocks
+        processed_content = ""
+        
+        # Default to markdown for most content
+        default_lexer = lexers.get_lexer_by_name("markdown")
+        
+        # Regular expression to find code blocks ```language ... ```
+        code_blocks = re.finditer(r'(```(\w*)\n)(.*?)(\n```)', content, re.DOTALL)
+        
+        last_end = 0
+        has_code_blocks = False
+        
+        for match in code_blocks:
+            has_code_blocks = True
+            start, end = match.span()
+            
+            # Add text before this code block using markdown lexer
+            if start > last_end:
+                markdown_part = content[last_end:start]
+                processed_content += pygments.highlight(markdown_part, default_lexer, self.html_formatter)
+            
+            # Extract opening, language, code and closing parts
+            opening = match.group(1)  # ```language\n
+            lang = match.group(2).strip() or None
+            code = match.group(3)
+            closing = match.group(4)  # \n```
+            
+            # First highlight the opening backticks with markdown lexer
+            processed_content += pygments.highlight(opening, default_lexer, self.html_formatter)
+            
+            try:
+                # Try to use the specified language
+                if lang and lang.lower() not in ('text', 'plain', 'markdown', 'md'):
+                    code_lexer = lexers.get_lexer_by_name(lang.lower())
+                else:
+                    # Try to guess if no useful language is specified
+                    code_lexer = lexers.guess_lexer(code)
+            except:
+                # Default to text if we can't determine the language
+                code_lexer = lexers.get_lexer_by_name("text")
+                
+            # Highlight the code block with appropriate lexer
+            highlighted_code_part = pygments.highlight(code, code_lexer, self.html_formatter)
+            processed_content += highlighted_code_part
+            
+            # Highlight the closing backticks with markdown lexer
+            processed_content += pygments.highlight(closing, default_lexer, self.html_formatter)
+            
+            last_end = end
+            
+        # Add any remaining text after the last code block
+        if last_end < len(content):
+            remaining = content[last_end:]
+            processed_content += pygments.highlight(remaining, default_lexer, self.html_formatter)
+            
+        # If no code blocks were found, just use markdown for everything
+        if not has_code_blocks:
+            processed_content = pygments.highlight(content, default_lexer, self.html_formatter)
+            
+        # Store the processed content for the next steps    
+        highlighted_code = processed_content
+        
+        # TASK: Process the highlighted code to preserve whitespace while allowing wrapping
+        #
+        # First, convert spaces to non-breaking spaces to preserve consecutive spaces
+        # and replace tabs with the appropriate number of spaces
+        def process_content(match):
+            span_tag = match.group(1)  # This is the full span tag with attributes
+            content = match.group(2)   # This is just the content inside the span
+            
+            # Replace leading spaces with non-breaking spaces
+            processed = re.sub(r'^([ \t]+)', lambda m: '&nbsp;' * len(m.group(1)), content, flags=re.MULTILINE)
+            # Replace consecutive spaces with alternating space and non-breaking space
+            processed = re.sub(r'  +', lambda m: '&nbsp; ' * (len(m.group(0)) // 2) + ('&nbsp;' if len(m.group(0)) % 2 else ''), processed)
+            
+            # Return the span with its original attributes but processed content
+            return f'<span {span_tag}>{processed}</span>'
+            
+        # Use a regex to capture the content between span tags and process it
+        # The regex now captures both the span attributes and the content separately
+        highlighted_code = re.sub(r'<span([^>]*)>(.*?)</span>', process_content, highlighted_code, flags=re.DOTALL)
+        
+        # Then replace the pre tag with our wrapper div
+        highlighted_code = highlighted_code.replace(
+            '<div class="highlight"><pre>', 
+            '<div class="highlight"><div class="code-wrapper">'
+        ).replace('</pre></div>', '</div></div>')
+
+        # Create complete HTML document
+        css = self.css + f"""
+            body {{ 
+                font-size: {self.font_size}px; 
+            }}
+        """
+        
+        html_content = f"""
+        <html>
+        <head>
+            <style>
                 body {{ 
-                    font-size: {self.font_size}px; 
+                    background-color: #282828;
+                    color: #f8f8f2;
+                    font-family: 'IBM Plex Mono', 'Consolas', 'Monaco', monospace;
+                    padding: 2px;
                 }}
-            """
-            
-            html_content = f"""
-            <html>
-            <head>
-                <style>
-                    body {{ 
-                        background-color: #282828;
-                        color: #f8f8f2;
-                        font-family: 'IBM Plex Mono', 'Consolas', 'Monaco', monospace;
-                        padding: 2px;
-                    }}
-                    .metadata {{
-                        color: #66d9ef;
-                        margin-bottom: 10px;
-                    }}
-                    .code-wrapper {{
-                        font-family: monospace;
-                        margin: 0;
-                        padding: 0;
-                    }}
-                    {css}
-                </style>
-            </head>
-            <body>
-                <div class="metadata">
-                    Sequence: {sequence}<br>
-                    Role: {role}
-                </div>
-                {highlighted_code}
-            </body>
-            </html>
-            """
-            
-            # Update the display
-            self.preview_text.load_html(html_content)
+                .metadata {{
+                    color: #66d9ef;
+                    margin-bottom: 10px;
+                }}
+                .code-wrapper {{
+                    font-family: monospace;
+                    margin: 0;
+                    padding: 0;
+                }}
+                {css}
+            </style>
+        </head>
+        <body>
+            <div class="metadata">
+                Sequence: {sequence}<br>
+                Role: {role}
+            </div>
+            {highlighted_code}
+        </body>
+        </html>
+        """
+        
+        # Update the display
+        self.preview_text.load_html(html_content)
 
     def _update_prompt_selector_ui(self):
         """Update the prompt selector buttons"""
@@ -754,19 +886,22 @@ class LLMControlUI:
         if selected_items:
             self.context_menu.post(event.x_root, event.y_root)
 
+    # FIXME: This can race with the LLM response writing to conversation_manager
     def delete_item(self):
         selected_items = self.tree.selection()
         for item in reversed(selected_items):  # Reverse to maintain correct indices
             index = self.tree.index(item)
             self.tree.delete(item)
-            del self.history[index]
+            del self.conversation_manager.history[index]
 
     def edit_item(self, event=None):
         item = self.tree.selection()[0]
         index = self.tree.index(item)
-        role = self.history[index]["role"]
-        content = self.history[index]["parts"][0]
-        sequence = self.history[index].get("sequence")
+        message = self.conversation_manager.history[index]
+
+        role = message["role"]
+        content = message["parts"][0]
+        sequence = message.get("sequence")
 
         # Create pop-up dialog
         dialog = tk.Toplevel(self.root)
@@ -780,7 +915,7 @@ class LLMControlUI:
 
         def save_changes():
             new_content = text_widget.get("1.0", tk.END).strip()
-            self.history[index]["parts"][0] = new_content
+            self.conversation_manager.history[index]["parts"][0] = new_content
             new_content_size = len(new_content)
             self.tree.item(item, values=(role, sequence, new_content_size, new_content))
             dialog.destroy()
@@ -827,10 +962,6 @@ class LLMControlUI:
     async def send_message(self):
         message = self.input_box.get("1.0", tk.END).strip()
         if message:
-            # Update sequence counter
-            self.seq_user += 1
-            my_seq = self.seq_user
-
             # Add file data
             # FIXME: Extend beyond .mp3
             parts = [message]
@@ -843,9 +974,14 @@ class LLMControlUI:
                     print(">> File loaded:", self.selected_file_path)
                     self.selected_file_path = None
 
+            # Prepare LLM chat session
+            self.chat_session = self.ui_model.generate_chat_session(self.conversation_manager, self.prompt_manager.get_current_prompt())
+
+            # Add input message to conversation manager
+            seq_id = self.conversation_manager.add_user_message(message)
             displayed_message = self.format_content_for_display(message)
             displayed_message_size = len(displayed_message)
-            self.tree.insert("", tk.END, values=("user", my_seq, displayed_message_size, displayed_message))
+            self.tree.insert("", tk.END, values=("user", seq_id, displayed_message_size, displayed_message))
             self.input_box.delete("1.0", tk.END)
 
             # Update status
@@ -853,12 +989,9 @@ class LLMControlUI:
             self.root.update()
 
             # Get LLM response
-            self.chat_session = self.ui_model.generate_chat_session(self.history, self.prompt_manager.get_current_prompt())
-            self.history.append({"role": "user", "parts": parts, "sequence": my_seq})
-
             start_time = time.time()
             try:
-                r = await self.chat_session.send_message_async(message)
+                r, new_history_items = await self.chat_session.send_message_async(message)
             except:
                 print(f"FAIL, message sent to LLM: {message}")
                 self.status_var.set("Status: FAIL")
@@ -870,19 +1003,34 @@ class LLMControlUI:
             latency = time.time() - start_time
             self.latency_var.set(f"Latency: {latency:.2f}s")
 
-            # Fix-up
-            r_text = r.text
-            r_text = r_text.strip()
-
-            # Metadata
-            # -- print(r.usage_metadata)
+            # Get token count from the response
             token_count = r.usage_metadata.total_token_count
             self.token_count_var.set(f"Tokens: {token_count}")
 
-            self.history.append({"role": "model", "parts": [r_text], "sequence": my_seq})
-            displayed_response = self.format_content_for_display(r_text)
-            displayed_response_size = len(displayed_response)
-            self.tree.insert("", tk.END, values=("model", my_seq, displayed_response_size, displayed_response))
+            # Update the history with all new items from the conversation manager
+            for item in new_history_items:
+                # Display the item in the UI if it's a model message or function result
+                if item["role"] == "model":
+                    content = item["parts"][0]
+                    displayed_content = self.format_content_for_display(content)
+                    displayed_content_size = len(content)
+                    self.tree.insert("", tk.END, values=("model", item.get("sequence"), displayed_content_size, displayed_content))
+                elif item["role"] == "function":
+                    # Display function calls in the UI
+                    function_name = item["function_call"].get("name", "unknown")
+                    args = json.dumps(item["function_call"].get("args", {}))
+                    displayed_content = f"Function call: {function_name}({args})"
+                    displayed_content_size = len(displayed_content)
+                    self.tree.insert("", tk.END, values=("function", item.get("sequence"), displayed_content_size, displayed_content))
+                elif item["role"] == "function_result":
+                    # Display function results in the UI
+                    function_name = item["function_call"].get("name", "unknown")
+                    result = item["function_call"].get("result", {})
+                    success = "✓" if result.get("success", False) else "✗"
+                    message = result.get("message", "")
+                    displayed_content = f"Function result: {function_name} {success} - {message}"
+                    displayed_content_size = len(displayed_content)
+                    self.tree.insert("", tk.END, values=("function_result", item.get("sequence"), displayed_content_size, displayed_content))
 
             # Update status to IDLE
             self.status_var.set("Status: IDLE")
@@ -920,15 +1068,15 @@ class LLMControlUI:
 
                     # Extract the history list from the file content
                     history_str = content.split("history=")[1].strip()
-                    self.history = ast.literal_eval(history_str)
+                    my_history = ast.literal_eval(history_str)
 
                     # No sequence numbers at all?
                     assign_sequences = False
-                    if all("sequence" not in item for item in self.history):
+                    if all("sequence" not in item for item in my_history):
                         assign_sequences = True
 
                     # Assign or update sequence numbers
-                    for item in self.history:
+                    for item in my_history:
                         if assign_sequences and not item.get("sequence"):
                             if item["role"] == "user":
                                 self.seq_user += 1
@@ -955,7 +1103,7 @@ class LLMControlUI:
                         return input
 
                     # Strip things to economize on tokens
-                    for item in self.history:
+                    for item in my_history:
                         parts = []
                         for part in item["parts"]:
                             if item["role"] == "user":
@@ -970,6 +1118,9 @@ class LLMControlUI:
                                     parts.append(load_bytes(part))
                         item["parts"] = parts
 
+                    # Add to conversation manager
+                    self.conversation_manager.import_history(my_history)
+
                     self.update_tree_view()
                     self.scroll_tree_to_bottom()
             except Exception as e:
@@ -981,7 +1132,8 @@ class LLMControlUI:
         if file_path:
             try:
                 with open(file_path, "w", encoding="utf-8") as file:
-                    pretty_history = json.dumps(self.history, indent=4, ensure_ascii=False, cls=BytesEncoder)
+                    history_data = self.conversation_manager.get_full_history()
+                    pretty_history = json.dumps(history_data, indent=4, ensure_ascii=False, cls=BytesEncoder)
                     file.write(f"history={pretty_history}")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save context: {str(e)}")
@@ -992,9 +1144,11 @@ class LLMControlUI:
 
     def update_tree_view(self):
         self.tree.delete(*self.tree.get_children())
-        for item in self.history:
+        for item in self.conversation_manager.history:
             sequence = item.get("sequence")
-            full_content = item["parts"][0]
+            full_content = ""
+            if item["parts"]:
+                full_content = item["parts"][0]
             content = self.format_content_for_display(full_content)
             content_size = len(full_content)
             self.tree.insert("", tk.END, values=(item["role"], sequence, content_size, content))

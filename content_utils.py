@@ -6,18 +6,10 @@ def fix_content(text: str, reindent_xml: bool = True):
         def process_xml(match):
             xml_content = match.group(1).strip()
             try:
+                if not xml_content.startswith("<?xml"):
+                    xml_content = '<?xml version="1.0" encoding="UTF-8"?>' + "\n" + xml_content
                 soup = BeautifulSoup(xml_content, 'html.parser')
-                body = soup.find('body')
-                if body:
-                    pretty_xml = ""
-                    for i in body.contents:
-                        try:
-                            pretty_xml += i.prettify()
-                        except:
-                            pretty_xml += str(i).strip()
-                else:
-                    pretty_xml = soup.find().prettify()
-
+                pretty_xml = soup.find().prettify()
                 pretty_xml = pretty_xml.strip()
                 return f"```xml\n{pretty_xml}\n```"
             except Exception as e:

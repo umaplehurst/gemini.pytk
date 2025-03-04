@@ -1,4 +1,6 @@
 from typing import Any, Dict, List, Optional
+from conversation_manager import ConversationManager
+
 from llm_provider import LLMProvider
 from llm_provider_google import GoogleAIProvider
 from llm_provider_meta_groq import MetaLlamaGroqProvider
@@ -42,12 +44,12 @@ class UserUIModel:
             return self.current_provider.get_settings()
         return {}
     
-    def generate_chat_session(self, history: List[Dict], system_prompt: Optional[str]) -> Any:
+    def generate_chat_session(self, conversation_manager: ConversationManager, system_prompt: Optional[str]) -> Any:
         if not self.current_provider:
             raise ValueError("No provider selected")
         return self.current_provider.create_chat_session(
             model_id=self.current_model,
-            history=history,
+            conversation_manager=conversation_manager,
             system_prompt=system_prompt
         )
 
