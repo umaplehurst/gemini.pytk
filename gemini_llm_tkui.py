@@ -48,15 +48,6 @@ import uuid
 import pathlib
 import threading
 
-# https://stackoverflow.com/a/77322684
-import base64
-class BytesEncoder(json.JSONEncoder):
-    def default(self, o):
-        if isinstance(o, bytes):
-            return base64.b64encode(o).decode("ascii")
-        else:
-            return super().default(o)
-
 class LLMControlUI:
     def __init__(self, root, queue):
         self.queue = queue
@@ -1132,9 +1123,39 @@ class LLMControlUI:
         if file_path:
             try:
                 with open(file_path, "w", encoding="utf-8") as file:
+                    # Get the data to save
                     history_data = self.conversation_manager.get_full_history()
-                    pretty_history = json.dumps(history_data, indent=4, ensure_ascii=False, cls=BytesEncoder)
-                    file.write(f"history={pretty_history}")
+                    cm_data = self.conversation_manager.to_dict()
+                    
+                    # Custom encoder for handling bytes objects
+                    class BytesRepr:
+                        def __init__(self, obj):
+                            self.obj = obj
+                        
+                        def __repr__(self):
+                            return f"b{repr(self.obj.decode('utf-8', errors='backslashreplace'))}"
+                    
+                    # Prepare the data structures, handling special types
+                    def prepare_data(obj):
+                        if isinstance(obj, dict):
+                            return {k: prepare_data(v) for k, v in obj.items()}
+                        elif isinstance(obj, list):
+                            return [prepare_data(item) for item in obj]
+                        elif isinstance(obj, bytes):
+                            return BytesRepr(obj)
+                        else:
+                            return obj
+                    
+                    # Prepare data for serialization
+                    prepared_history = prepare_data(history_data)
+                    prepared_cm_data = prepare_data(cm_data)
+                    
+                    # Use pprint to generate valid Python syntax
+                    import pprint
+                    pp = pprint.PrettyPrinter(indent=2, width=120)
+                    
+                    file.write(f"history={pp.pformat(prepared_history)}\n\n")
+                    # file.write(f"conversation_data = {pp.pformat(prepared_cm_data)}\n")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save context: {str(e)}")
 

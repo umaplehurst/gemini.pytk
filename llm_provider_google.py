@@ -5,7 +5,6 @@ import os
 from conversation_manager import ConversationManager
 
 from icecream import ic
-DEBUG = True
 
 from google import genai
 from google.genai.types import HarmCategory, HarmBlockThreshold, SafetySetting
@@ -57,6 +56,14 @@ class GoogleAIProvider(LLMProvider):
             ),
             "enable_artifact_gizmos": KnobFactory.create_knob("checkbox",
                 name="Function Calling: Artifact Gizmos",
+                default_value=True
+            ),
+            "enable_memory_gizmos": KnobFactory.create_knob("checkbox",
+                name="Function Calling: Memory / SP Gizmos",
+                default_value=True
+            ),
+            "enable_debug_prints": KnobFactory.create_knob("checkbox",
+                name="Debug Prints",
                 default_value=False
             )
         }
@@ -92,7 +99,7 @@ class GoogleAIProvider(LLMProvider):
     def get_settings(self) -> Dict[str, Any]:
         return self.settings
     
-    def _get_function_declarations(self):
+    def _get_artifact_tool_functions(self):
         """Define the function declarations for the model to use"""
         create_artifact_function = FunctionDeclaration(
             name="create_artifact",
@@ -151,12 +158,77 @@ class GoogleAIProvider(LLMProvider):
                 "required": ["id"]
             }
         )
-        
         return [create_artifact_function, edit_artifact_function]
+
+    def _get_system_prompt_tool_functions(self):
+        edit_system_prompt_function = FunctionDeclaration(
+            name="edit_system_prompt",
+            description="Edit the system prompt by replacing text",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "substitutions": {
+                        "type": "array",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "from_str": {"type": "STRING"},
+                                "to_str": {"type": "STRING"},
+                            },
+                            "required": ["from_str", "to_str"],
+                        },
+                        "description": "An array of single substitution objects. Each substitution needs to be globally unique in order for it to succeed, so include sufficient context for there to be a single match in the system prompt."
+                    },
+                },
+            }
+        )
+        return [edit_system_prompt_function]
+
+    def _get_memory_twizzle_tool_functions(self):
+        memory_twizzle_function = FunctionDeclaration(
+            name="memory_twizzle",
+            description="Unified function to handle all system memory operations (create, edit, delete)",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "description": "Operation mode: 'new', 'edit', or 'delete'",
+                        "enum": ["new", "edit", "delete"]
+                    },
+                    "memory_id": {
+                        "type": "integer",
+                        "description": "The ID of the memory (required for 'edit' and 'delete', optional for 'new')"
+                    },
+                    "contents": {
+                        "type": "string",
+                        "description": "The contents of the memory (required for 'new' and 'edit', ignored for 'delete')"
+                    }
+                },
+                "required": ["mode"]
+            }
+        )
+        return [memory_twizzle_function]
         
     def create_chat_session(self, model_id: str, conversation_manager: ConversationManager, system_prompt: Optional[str]) -> Any:
+        DO_DEBUG = self.settings["enable_debug_prints"].get_value()
+
         # Update the conversation manager with the provided history
         self.conversation_manager = conversation_manager
+
+        # If a system_prompt is provided, update it in the conversation manager
+        if system_prompt:
+            if self.conversation_manager.system_prompt_setup != system_prompt:
+                self.conversation_manager.system_prompt_setup = system_prompt
+                self.conversation_manager.system_prompt = system_prompt
+        
+        # Get the full system prompt with memories
+        full_system_prompt = self.conversation_manager.get_full_system_prompt()
+
+        # Debug
+        if DO_DEBUG:
+            ic("SP:", full_system_prompt)
+
         safety_settings = [
             SafetySetting(category='HARM_CATEGORY_CIVIC_INTEGRITY', threshold='BLOCK_NONE'),
             SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE'),
@@ -167,13 +239,15 @@ class GoogleAIProvider(LLMProvider):
         ]
         
         # Check if function calling is enabled
-        tools = None
+        tools = []
         if self.settings["enable_artifact_gizmos"].get_value():
-            function_declarations = self._get_function_declarations()
-            tools = [Tool(function_declarations=function_declarations)]
+            tools += [Tool(function_declarations=self._get_artifact_tool_functions())]
+        if self.settings["enable_memory_gizmos"].get_value():
+            tools += [Tool(function_declarations=self._get_system_prompt_tool_functions())]
+            tools += [Tool(function_declarations=self._get_memory_twizzle_tool_functions())]
 
         generation_config: GenerateContentConfig = {
-            "system_instruction": system_prompt,
+            "system_instruction": full_system_prompt,
             "safety_settings": safety_settings,
             "response_mime_type": "text/plain",
             "tools": tools,
@@ -216,7 +290,7 @@ class GoogleAIProvider(LLMProvider):
             filtered_history.append(filtered_item)
 
         # Debug
-        if DEBUG:
+        if DO_DEBUG:
             ic("LLM chat_history:", filtered_history)
 
         # Create a chat session with function calling support
@@ -228,16 +302,17 @@ class GoogleAIProvider(LLMProvider):
         
         # Wrap the chat session to handle function calls if enabled
         if self.settings["enable_artifact_gizmos"].get_value():
-            return FunctionCallingChatSession(chat_session, self.conversation_manager)
+            return FunctionCallingChatSession(chat_session, self.conversation_manager, DO_DEBUG)
         
-        return SimpleChatSession(chat_session, self.conversation_manager)
+        return SimpleChatSession(chat_session, self.conversation_manager, DO_DEBUG)
 
 class SimpleChatSession:
     """Basic chat session that updates the conversation manager"""
     
-    def __init__(self, chat_session, conversation_manager):
+    def __init__(self, chat_session, conversation_manager, do_debug: bool):
         self.chat_session = chat_session
         self.conversation_manager = conversation_manager
+        self.do_debug = do_debug
   
     async def send_message_async(self, message):
         """Send a message and update the conversation manager"""
@@ -249,7 +324,7 @@ class SimpleChatSession:
         
         # Send to LLM
         response = await self.chat_session.send_message(message)
-        if DEBUG:
+        if self.do_debug:
             ic("LLM response:", response)
         
         # Add model response to conversation
@@ -276,8 +351,8 @@ class FunctionCallingChatSession(SimpleChatSession):
         
         # Send to LLM
         response = await self.chat_session.send_message(message)
-        if DEBUG:
-            print(response)
+        if self.do_debug:
+            ic("LLM response:", response)
         
         # Check if the response contains function calls
         # FIXME: We only deal with a single candidate reply here
@@ -300,7 +375,7 @@ class FunctionCallingChatSession(SimpleChatSession):
                                 name=function_name,
                                 response={"content": result}
                             )
-                            response = await self.chat_session.send_message_async(content)
+                            response = await self.chat_session.send_message(content)
                     elif hasattr(part, 'text') and part.text:
                         self.conversation_manager.add_model_message(part.text, sequence)
 
@@ -325,6 +400,18 @@ class FunctionCallingChatSession(SimpleChatSession):
                 args.get('id', ''),
                 args.get('global_substitutions', []),
                 args.get('single_substitutions', []),
+                sequence
+            )
+        elif function_name == "edit_system_prompt":
+            return self.conversation_manager.edit_system_prompt(
+                args.get('substitutions', []),
+                sequence
+            )
+        elif function_name == "memory_twizzle":
+            return self.conversation_manager.memory_twizzle(
+                args.get('mode', ''),
+                args.get('memory_id'),  # Allow None for 'new' mode
+                args.get('contents'),   # Allow None for 'delete' mode
                 sequence
             )
         else:
