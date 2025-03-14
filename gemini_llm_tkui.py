@@ -969,7 +969,7 @@ class LLMControlUI:
             self.chat_session = self.ui_model.generate_chat_session(self.conversation_manager, self.prompt_manager.get_current_prompt())
 
             # Add input message to conversation manager
-            seq_id = self.conversation_manager.add_user_message(message)
+            seq_id = self.conversation_manager.add_user_message(parts)
             displayed_message = self.format_content_for_display(message)
             displayed_message_size = len(displayed_message)
             self.tree.insert("", tk.END, values=("user", seq_id, displayed_message_size, displayed_message))
@@ -982,7 +982,7 @@ class LLMControlUI:
             # Get LLM response
             start_time = time.time()
             try:
-                r, new_history_items = await self.chat_session.send_message_async(message)
+                r, new_history_items = await self.chat_session.send_message_async(parts)
             except:
                 print(f"FAIL, message sent to LLM: {message}")
                 self.status_var.set("Status: FAIL")

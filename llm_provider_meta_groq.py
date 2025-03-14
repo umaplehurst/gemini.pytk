@@ -103,9 +103,13 @@ class ChatSession:
         self.usage_metadata = UsageMetadataWrapper()
         self.conversation_manager = conversation_manager
         
-    async def send_message_async(self, message):
+    async def send_message_async(self, parts: List[Any]):
         # Track the initial history length to identify new items
         initial_history_length = len(self.conversation_manager.history)
+
+        message = parts[0]
+        if not isinstance(message, str):
+            raise ValueError('Only text messages are supported!')
 
         self.messages.append({
             "role": "user",

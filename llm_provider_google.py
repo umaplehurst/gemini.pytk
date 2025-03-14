@@ -314,7 +314,18 @@ class SimpleChatSession:
         self.conversation_manager = conversation_manager
         self.do_debug = do_debug
   
-    async def send_message_async(self, message):
+    def get_parts(self, in_parts):
+        parts = []
+        for part in in_parts:
+            if isinstance(part, str):
+                parts.append(Part.from_text(text=part))
+            elif isinstance(part, dict) and "mime_type" in part and "data" in part:
+                parts.append(Part.from_bytes(data=part["data"], mime_type=part["mime_type"]))
+            else:
+                raise ValueError('Unsupported input part type!')
+        return parts
+
+    async def send_message_async(self, in_parts):
         """Send a message and update the conversation manager"""
         # Track the initial history length to identify new items
         initial_history_length = len(self.conversation_manager.history)
@@ -323,7 +334,8 @@ class SimpleChatSession:
         sequence = self.conversation_manager.seq_user + 1
         
         # Send to LLM
-        response = await self.chat_session.send_message(message)
+        out_parts = self.get_parts(in_parts)
+        response = await self.chat_session.send_message(out_parts)
         if self.do_debug:
             ic("LLM response:", response)
         
@@ -341,7 +353,7 @@ class SimpleChatSession:
 class FunctionCallingChatSession(SimpleChatSession):
     """Chat session that handles function calling and updates the conversation manager"""
     
-    async def send_message_async(self, message):
+    async def send_message_async(self, in_parts):
         """Send a message, handle any function calls, and update the conversation manager"""
         # Track the initial history length to identify new items
         initial_history_length = len(self.conversation_manager.history)
@@ -350,7 +362,8 @@ class FunctionCallingChatSession(SimpleChatSession):
         sequence = self.conversation_manager.seq_user + 1
         
         # Send to LLM
-        response = await self.chat_session.send_message(message)
+        out_parts = self.get_parts(in_parts)
+        response = await self.chat_session.send_message(out_parts)
         if self.do_debug:
             ic("LLM response:", response)
         

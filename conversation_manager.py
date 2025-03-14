@@ -13,12 +13,12 @@ class ConversationManager:
         self.system_memories = {}  # Dictionary of {id: memory_text}
         self.next_memory_id = 1
     
-    def add_user_message(self, message: str) -> int:
+    def add_user_message(self, parts: List[Any]) -> int:
         """Add a user message to the history and return its sequence number"""
         self.seq_user += 1
         self.history.append({
             "role": "user",
-            "parts": [message],
+            "parts": parts,
             "sequence": self.seq_user
         })
         return self.seq_user
