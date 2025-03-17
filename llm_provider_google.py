@@ -78,6 +78,14 @@ class GoogleAIProvider(LLMProvider):
                 ModelOption(
                     id="gemini-1.5-pro-002",
                     name="Gemini 1.5 Pro"
+                ),
+                ModelOption(
+                    id="gemini-2.0-flash-exp",
+                    name="Gemini 2.0 Flash Experimental"
+                ),
+                ModelOption(
+                    id="gemini-2.0-flash-thinking-exp-01-21",
+                    name="Gemini 2.0 Flash Experimental (Thinking)"
                 )
             ]
         # Gemini Developer API model list
