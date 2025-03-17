@@ -14,16 +14,18 @@ class UsageMetadataWrapper:
     def __init__(self):
         self.total_token_count = 0
 
-class MetaLlamaGroqProvider(LLMProvider):
+class GenericOAIWrapperProvider(LLMProvider):
     def __init__(self):
         super().__init__()
-        self.name = "meta_llama_groq"
+        self.name = "groq_nous"
         self.client = None
         self.settings = {}
         
     def initialize(self):
         if not "GROQ_API_KEY" in os.environ:
             raise ValueError("Missing GROQ_API_KEY environment variable")
+        if not "NOUS_API_KEY" in os.environ:
+            raise ValueError("Missing NOUS_API_KEY environment variable")
             
         self.settings = {
             "temperature": KnobFactory.create_knob("slider", 
@@ -42,14 +44,31 @@ class MetaLlamaGroqProvider(LLMProvider):
         
         self.models = [
             ModelOption(
-                id="llama-3.3-70b-versatile",
-                name="Llama 3.3 70B Versatile"
+                id="groq-llama-3.3-70b-versatile",
+                name="Llama 3.3 70B Versatile (Groq)"
+            ),
+            ModelOption(
+                id="nous-Hermes-3-Llama-3.1-70B",
+                name="Hermes 3 Llama 3.1 70B (Nous)"
+            ),
+            ModelOption(
+                id="nous-DeepHermes-3-Mistral-24B-Preview",
+                name="DeepHermes 3 Mistral 24B Preview (Nous)"
+            ),
+            ModelOption(
+                id="nous-DeepHermes-3-Llama-3-8B-Preview",
+                name="DeepHermes 3 Llama 3 8B Preview (Nous)"
             )
         ]
         
-        self.client = AsyncOpenAI(
-            api_key=os.environ["GROQ_API_KEY"], 
+        self.client_groq = AsyncOpenAI(
+            api_key=os.environ["GROQ_API_KEY"],
             base_url="https://api.groq.com/openai/v1"
+        )
+        
+        self.client_nous = AsyncOpenAI(
+            api_key=os.environ["NOUS_API_KEY"],
+            base_url="https://inference-api.nousresearch.com/v1"
         )
 
     def get_available_models(self) -> List[ModelOption]:
@@ -61,10 +80,10 @@ class MetaLlamaGroqProvider(LLMProvider):
     def create_chat_session(self, model_id: str, conversation_manager: ConversationManager, system_prompt: Optional[str]) -> Any:
         messages = []
         if system_prompt:
-            self.messages.append(
+            messages.append(
                 {
                     "role": "system",
-                    "content": (self.system_prompt),
+                    "content": (system_prompt),
                 }
             )
 
@@ -82,12 +101,22 @@ class MetaLlamaGroqProvider(LLMProvider):
                 })
             else:
                 print("!!! message ignored --", item)
-        if DEBUG:
-            ic("LLM chat_history:", messages)
+
+        # Select the appropriate client based on model prefix
+        if model_id.startswith("groq-"):
+            client = self.client_groq
+            # Strip the 'groq-' prefix for the actual API call
+            actual_model_id = model_id[5:]
+        elif model_id.startswith("nous-"):
+            client = self.client_nous
+            # Strip the 'nous-' prefix for the actual API call
+            actual_model_id = model_id[5:]
+        else:
+            raise ValueError(f"Unknown model provider prefix in model_id: {model_id}")
 
         return ChatSession(
-            client=self.client,
-            model=model_id,
+            client=client,
+            model=actual_model_id,
             messages=messages,
             settings=self.settings,
             conversation_manager=conversation_manager
@@ -115,7 +144,9 @@ class ChatSession:
             "role": "user",
             "content": message
         })
-        
+        if DEBUG:
+            ic("LLM chat_history:", self.messages)
+       
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=self.messages,

@@ -3,7 +3,7 @@ from conversation_manager import ConversationManager
 
 from llm_provider import LLMProvider
 from llm_provider_google import GoogleAIProvider
-from llm_provider_meta_groq import MetaLlamaGroqProvider
+from llm_provider_generic_oai import GenericOAIWrapperProvider
 
 class UserUIModel:
     def __init__(self):
@@ -16,7 +16,7 @@ class UserUIModel:
         # Initialize built-in providers
         providers = [
             GoogleAIProvider(),
-            MetaLlamaGroqProvider()
+            GenericOAIWrapperProvider()
         ]
         
         for provider in providers:
